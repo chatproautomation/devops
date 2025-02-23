@@ -1,0 +1,216 @@
+#!/bin/bash
+
+echo "====================================="
+echo "  🔥 Instalador Automático - Infra  "
+echo "====================================="
+echo ""
+echo "Informe os dados para configuração:"
+
+# Solicitar domínio principal
+read -p "🌐 Digite seu domínio principal (ex: meudominio.com): " DOMAIN
+read -p "📧 Digite seu e-mail (para SSL Let's Encrypt): " EMAIL
+read -p "👤 Digite um nome de usuário para acessar os sistemas: " USERNAME
+read -s -p "🔒 Digite uma senha única para todos os acessos: " PASSWORD
+echo ""
+
+# Atualizando sistema
+echo "🔄 Atualizando o sistema..."
+apt update && apt upgrade -y
+apt install -y curl git apache2-utils unzip
+
+# Instalando Docker e Docker Compose
+echo "🐳 Instalando Docker..."
+curl -fsSL https://get.docker.com | bash
+systemctl enable --now docker
+usermod -aG docker $USER
+
+echo "📦 Instalando Docker Compose..."
+curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+chmod +x /usr/local/bin/docker-compose
+
+# Criando diretório
+mkdir -p /opt/infra && cd /opt/infra
+
+# Criando arquivos de configuração com variáveis
+echo "⚙️ Criando arquivos de configuração..."
+
+# Criando traefik.yml
+cat > traefik.yml <<EOF
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: "websecure"
+          scheme: "https"
+  websecure:
+    address: ":443"
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: "$EMAIL"
+      storage: "/letsencrypt/acme.json"
+      httpChallenge:
+        entryPoint: "web"
+
+api:
+  dashboard: true
+  insecure: false
+
+log:
+  level: INFO
+
+providers:
+  docker:
+    exposedByDefault: false
+  file:
+    filename: "/etc/traefik/dynamic_conf.yml"
+EOF
+
+# Criando dynamic_conf.yml
+cat > dynamic_conf.yml <<EOF
+http:
+  routers:
+    api:
+      rule: "Host(\`traefik.$DOMAIN\`)"
+      entryPoints: "websecure"
+      service: "api@internal"
+      middlewares:
+        - auth
+
+  middlewares:
+    auth:
+      basicAuth:
+        users:
+          - "$USERNAME:\$(htpasswd -nb $USERNAME $PASSWORD | cut -d ":" -f 2)"
+
+tls:
+  certificates:
+    - certFile: "/letsencrypt/cert.pem"
+      keyFile: "/letsencrypt/key.pem"
+EOF
+
+# Criando docker-compose.yaml
+cat > docker-compose.yaml <<EOF
+version: "3.9"
+
+services:
+  traefik:
+    image: "traefik:v2.10"
+    container_name: "traefik"
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./traefik.yml:/etc/traefik/traefik.yml"
+      - "./dynamic_conf.yml:/etc/traefik/dynamic_conf.yml"
+      - "./letsencrypt:/letsencrypt"
+    networks:
+      - infra
+
+  portainer:
+    image: "portainer/portainer-ce"
+    container_name: "portainer"
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.portainer.rule=Host(\`portainer.$DOMAIN\`)"
+      - "traefik.http.routers.portainer.entrypoints=websecure"
+      - "traefik.http.routers.portainer.tls.certresolver=letsencrypt"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "portainer_data:/data"
+    networks:
+      - infra
+
+  minio:
+    image: "minio/minio"
+    container_name: "minio"
+    restart: always
+    command: server /data --console-address ":9001"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.minio.rule=Host(\`minio.$DOMAIN\`)"
+      - "traefik.http.routers.minio.entrypoints=websecure"
+      - "traefik.http.routers.minio.tls.certresolver=letsencrypt"
+    volumes:
+      - "minio_data:/data"
+    networks:
+      - infra
+
+  typebot:
+    image: "baptistearno/typebot"
+    container_name: "typebot"
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.typebot.rule=Host(\`typebot.$DOMAIN\`)"
+      - "traefik.http.routers.typebot.entrypoints=websecure"
+      - "traefik.http.routers.typebot.tls.certresolver=letsencrypt"
+    networks:
+      - infra
+
+  n8n:
+    image: "n8nio/n8n"
+    container_name: "n8n"
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.n8n.rule=Host(\`n8n.$DOMAIN\`)"
+      - "traefik.http.routers.n8n.entrypoints=websecure"
+      - "traefik.http.routers.n8n.tls.certresolver=letsencrypt"
+    networks:
+      - infra
+
+  evolutionapi:
+    image: "evolution/api"
+    container_name: "evolutionapi"
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.evolutionapi.rule=Host(\`api.$DOMAIN\`)"
+      - "traefik.http.routers.evolutionapi.entrypoints=websecure"
+      - "traefik.http.routers.evolutionapi.tls.certresolver=letsencrypt"
+    networks:
+      - infra
+
+networks:
+  infra:
+
+volumes:
+  portainer_data:
+  minio_data:
+EOF
+
+# Criando diretório para certificados
+mkdir -p /opt/infra/letsencrypt
+
+# Criando autenticação
+echo "$USERNAME:$(htpasswd -nb $USERNAME $PASSWORD | cut -d ":" -f 2)" > /opt/infra/auth
+
+# Iniciando os serviços
+echo "🚀 Iniciando os serviços..."
+docker-compose up -d
+
+echo ""
+echo "====================================="
+echo " ✅ Instalação Concluída! "
+echo "====================================="
+echo "Acesse seus serviços:"
+echo "📌 Traefik: https://traefik.$DOMAIN"
+echo "📌 Portainer: https://portainer.$DOMAIN"
+echo "📌 Minio: https://minio.$DOMAIN"
+echo "📌 Typebot: https://typebot.$DOMAIN"
+echo "📌 n8n: https://n8n.$DOMAIN"
+echo "📌 Evolution API: https://api.$DOMAIN"
+echo ""
+echo "🔑 Usuário: $USERNAME"
+echo "🔑 Senha: $PASSWORD"
