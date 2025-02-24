@@ -1,0 +1,19 @@
+http:
+  routers:
+    api:
+      rule: "Host(`traefik.`)"
+      entryPoints: "websecure"
+      service: "api@internal"
+      middlewares:
+        - auth
+
+  middlewares:
+    auth:
+      basicAuth:
+        users:
+          - ":$(htpasswd -nb   | cut -d ":" -f 2)"
+
+tls:
+  certificates:
+    - certFile: "/letsencrypt/cert.pem"
+      keyFile: "/letsencrypt/key.pem"

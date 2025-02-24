@@ -1,0 +1,90 @@
+version: "3.9"
+
+services:
+  traefik:
+    image: "traefik:v2.10"
+    container_name: "traefik"
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./traefik.yml:/etc/traefik/traefik.yml"
+      - "./dynamic_conf.yml:/etc/traefik/dynamic_conf.yml"
+      - "./letsencrypt:/letsencrypt"
+    networks:
+      - infra
+
+  portainer:
+    image: "portainer/portainer-ce"
+    container_name: "portainer"
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.portainer.rule=Host(`portainer.`)"
+      - "traefik.http.routers.portainer.entrypoints=websecure"
+      - "traefik.http.routers.portainer.tls.certresolver=letsencrypt"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "portainer_data:/data"
+    networks:
+      - infra
+
+  minio:
+    image: "minio/minio"
+    container_name: "minio"
+    restart: always
+    command: server /data --console-address ":9001"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.minio.rule=Host(`minio.`)"
+      - "traefik.http.routers.minio.entrypoints=websecure"
+      - "traefik.http.routers.minio.tls.certresolver=letsencrypt"
+    volumes:
+      - "minio_data:/data"
+    networks:
+      - infra
+
+  typebot:
+    image: "baptistearno/typebot"
+    container_name: "typebot"
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.typebot.rule=Host(`typebot.`)"
+      - "traefik.http.routers.typebot.entrypoints=websecure"
+      - "traefik.http.routers.typebot.tls.certresolver=letsencrypt"
+    networks:
+      - infra
+
+  n8n:
+    image: "n8nio/n8n"
+    container_name: "n8n"
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.n8n.rule=Host(`n8n.`)"
+      - "traefik.http.routers.n8n.entrypoints=websecure"
+      - "traefik.http.routers.n8n.tls.certresolver=letsencrypt"
+    networks:
+      - infra
+
+  evolutionapi:
+    image: "evolution/api"
+    container_name: "evolutionapi"
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.evolutionapi.rule=Host(`api.`)"
+      - "traefik.http.routers.evolutionapi.entrypoints=websecure"
+      - "traefik.http.routers.evolutionapi.tls.certresolver=letsencrypt"
+    networks:
+      - infra
+
+networks:
+  infra:
+
+volumes:
+  portainer_data:
+  minio_data:
